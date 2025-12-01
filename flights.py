@@ -26,6 +26,16 @@ DAY_OF_MONTH': Dia do mês.
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay, classification_report
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.feature_selection import SelectFromModel
+from sklearn import model_selection
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.model_selection import GridSearchCV
+from sklearn import metrics
 #%%
 pd.set_option('display.max_columns', None)
 
@@ -39,7 +49,7 @@ print(df_fev.columns.tolist())
 print(df_jan.columns.tolist())
 
 df = pd.concat([df_jan,df_jan], axis=0).reset_index(drop=True)
-#%%
+
 '''Arrumar os nulos nas colunas TAIL_NUM , DEP_TIME, DEP_DEL15, ARR_TIME, ARR_DEL15, Unnamed'''
 df.isnull().sum()
 
@@ -51,8 +61,6 @@ df[df['TAIL_NUM'] == 'SEM_NUM']
 #%% Hora real da decolagem (formato HHMM)
 df['DEP_TIME'].value_counts()
 
-
-#%%
 #%% Indicador de atraso na partida:
 # 1 = atraso > 15 minutos
 # 0 = sem atraso significativo
@@ -114,7 +122,7 @@ plt.show()
 #%%
 #ATRASO DAS PARTIDAS ATRAVES DAS CHEGADAS
 atraso_chegada = df[df['ARR_DEL15'] == 1.0]
-atraso_chegada = atraso_partida.groupby('DEST').agg({'ARR_DEL15': 'sum'}).sort_values(by='ARR_DEL15', ascending=False).head(10)
+atraso_chegada = atraso_chegada.groupby('DEST').agg({'ARR_DEL15': 'sum'}).sort_values(by='ARR_DEL15', ascending=False).head(10)
 atraso_chegada
 #%%
 plt.figure(figsize=[14,10])
@@ -122,12 +130,14 @@ sns.barplot(data=atraso_chegada, x=atraso_chegada.index, y='ARR_DEL15')
 plt.show()
 
 #%%
+'''REVER ISSO AQUI, EXISTE A FAIXA DE HORARIO DE SAIDA'''
+
 #COLUNA COM APENAS HORA DE PARTIDA, PARA VER QUAL HORARIO TEM MAIS ATRASOS
 df['DEP_TIME'] = df['DEP_TIME'].astype(int)
 df['HORA_PARTIDA'] = df['DEP_TIME'].astype(str).str.zfill(4).str[:2]
 #ATRASO DE ACORDO COM AS HORAS
 
-hora_partida_atrasos = pd.crosstab(df['HORA_PARTIDA'], df['TOTAL_ATRASOS']).sort_values(by=[1], ascending=False).head(10)
+hora_partida_atrasos = pd.crosstab(df['HORA_PARTIDA'], df['TOTAL_ATRASOS']).sort_values(by=1, ascending=False).head(10)
 hora_partida_atrasos
 
 #%%
@@ -139,5 +149,177 @@ df['HORA_CHEGADA'] = df['ARR_TIME'].astype(str).str.zfill(4).str[:2]
 df_chegada_atrasada = df[df['DEP_DEL15']==0.0]
 hora_chegada_atrasos = pd.crosstab(df_chegada_atrasada['HORA_CHEGADA'], df_chegada_atrasada['TOTAL_ATRASOS']).sort_values(by=[1], ascending=False)  
 hora_chegada_atrasos
+#%% dia da semana e dia do mes com mais voos atrasados
+dia_atraso = df[['DAY_OF_WEEK', 'PERCURSO', 'TOTAL_ATRASOS']]
+dia_atraso_count = dia_atraso.groupby('DAY_OF_WEEK').agg({'TOTAL_ATRASOS':'count'}).sort_values(by='TOTAL_ATRASOS', ascending=False).head(10)
+dia_atraso_count
+#%%dia do mes por percurso com mais voos atrasados
+dia_atraso_percurso = dia_atraso.groupby(['PERCURSO','DAY_OF_WEEK']).agg({'TOTAL_ATRASOS':'count'}).sort_values(by='TOTAL_ATRASOS', ascending=False).head(10)
+dia_atraso_percurso
+
+#%% analise de dia por numero de atrasos
+dia_atraso = df[['DAY_OF_MONTH', 'PERCURSO', 'TOTAL_ATRASOS']]
+dia_atraso_count = dia_atraso.groupby('DAY_OF_MONTH').agg({'TOTAL_ATRASOS':'count'}).sort_values(by='TOTAL_ATRASOS', ascending=False).head(10)
+dia_atraso_count
+#%% analise de dia e percurso por numero de atrasos
+dia_atraso_percurso = dia_atraso.groupby(['PERCURSO','DAY_OF_MONTH']).agg({'TOTAL_ATRASOS':'count'}).sort_values(by='TOTAL_ATRASOS', ascending=False).head(10)
+dia_atraso_percurso
+
 #%%
 
+
+X = df[['DAY_OF_MONTH', 'DAY_OF_WEEK', 'ORIGIN', 'DEST', 'CANCELLED', 'DIVERTED', 'DISTANCE',  'HORA_PARTIDA']].copy()
+y = df[['TOTAL_ATRASOS']].copy()
+#%%
+X[['CANCELLED', 'DIVERTED', 'DISTANCE', 'HORA_PARTIDA']] = X[['CANCELLED', 'DIVERTED', 'DISTANCE' ,'HORA_PARTIDA']].astype(int)
+#%%
+
+X_train, X_test, y_train, y_test = model_selection.train_test_split(X, y, random_state=42, test_size=0.2, stratify=y)
+#%%
+num_cols = X.select_dtypes(include=['int', 'float']).columns
+
+cat_cols = X.select_dtypes(include='object').columns
+
+#%%
+X_transformer = ColumnTransformer(transformers=[
+    ("int", StandardScaler(), num_cols),
+    ("cat", OneHotEncoder(drop='first', handle_unknown='ignore', sparse_output=True), cat_cols)
+])
+
+#%%
+
+model_reg = LogisticRegression(n_jobs=-1,verbose=1,random_state=42)
+
+pipe = Pipeline(steps=[
+    ("preprocessor", X_transformer),
+    ("model", model_reg)
+                
+                ])
+
+params = {
+    "model__C": [ 0.01, 0.1, 1.0, 10.0],
+    "model__max_iter": [500, 700],
+    "model__class_weight": [None, 'balanced']
+}
+
+grid = GridSearchCV(pipe, param_grid=params, cv=3, scoring="roc_auc", verbose=2)
+grid.fit(X_train,y_train)
+print(grid.best_params_)
+print(grid.best_estimator_)
+print(grid.best_score_)
+
+#%%
+
+y_test_predict = grid.predict(X_test) #tESTANDO A ACURACIA
+y_test_proba = grid.predict_proba(X_test)[:,1] #TESTANDO A CURVA ROC
+
+roc_test = metrics.roc_curve(y_test, y_test_proba)
+acc_test = metrics.accuracy_score(y_test, y_test_predict)
+auc_test = metrics.roc_auc_score(y_test, y_test_proba)
+
+roc = metrics.roc_curve(y_test_predict, y_test_proba)
+cm = confusion_matrix(y_test, y_test_predict)
+
+fig, ax = plt.subplots(1, 2, figsize=(12, 5))
+
+# Curva ROC
+ax[0].plot(roc_test[0], roc_test[1], label=f"Teste AUC = {auc_test:.3f}")
+ax[0].plot([0, 1], [0, 1], 'k--')
+ax[0].set_title("Curva ROC")
+ax[0].set_xlabel("Falso Positivo (1 - Especificidade)")
+ax[0].set_ylabel("Verdadeiro Positivo (Sensibilidade)")
+ax[0].legend()
+ax[0].grid(True)
+
+# Matriz de Confusão
+ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["Não Churn", "Churn"]).plot(
+    cmap="Blues", ax=ax[1], values_format="d"
+)
+ax[1].set_title("Matriz de Confusão")
+
+plt.tight_layout()
+plt.show()
+
+#%%
+
+model = RandomForestClassifier(random_state=42, n_jobs=-1)
+
+pipe_model = Pipeline(steps=[
+    ("preprocesso", X_transformer),
+    ("model", model)
+])
+
+params = {
+    "model__min_samples_leaf": [10],
+    "model__n_estimators": [100],
+    "model__class_weight": ['balanced'],
+    }
+
+pipe_model.fit(X_train, y_train)
+
+
+grid = GridSearchCV(pipe_model, param_grid=params, cv=3, scoring="roc_auc", verbose=2)
+grid.fit(X_train, y_train)
+
+print("\nMelhores parâmetros encontrados:")
+print(grid.best_params_)
+
+#%%
+from sklearn.svm import SVC
+
+model = SVC(random_state=42, probability=True)
+
+pipe_model = Pipeline(steps=[
+    ("preprocesso", X_transformer),
+    ("model", model)
+])
+
+params = {
+    'model__C': [0.1, 1, 10, 100],
+    'model__kernel': ['linear', 'rbf'],
+    'model__class_weight': [None, 'balanced']
+}
+
+pipe_model.fit(X_train, y_train)
+
+grid = GridSearchCV(pipe_model, param_grid=params, cv=3, scoring="roc_auc", verbose=2)
+grid.fit(X_train, y_train)
+
+print("\nMelhores parâmetros encontrados:")
+print(grid.best_params_)
+
+#%%
+from sklearn.model_selection import StratifiedKFold, cross_val_score,cross_val_predict
+import numpy as np
+lr_model_final = LogisticRegression(C=1.0,n_jobs=-1,verbose=1, random_state=154)
+lr_model_final.fit(X_train, y_train)
+
+
+#%%
+cv = StratifiedKFold(n_splits=3, shuffle=True)
+result = cross_val_score(lr_model_final,X_train,y_train, cv=cv, scoring='roc_auc', n_jobs=-1)
+print(f'A média: {np.mean(result)}')
+print(f'Limite Inferior: {np.mean(result)-2*np.std(result)}')
+print(f'Limite Superior: {np.mean(result)+2*np.std(result)}')
+
+#%%
+y_test_predict = grid.predict(X_test) #tESTANDO A ACURACIA
+y_test_proba = grid.predict_proba(X_test)[:,1] #TESTANDO A CURVA ROC
+
+roc_test = metrics.roc_curve(y_test, y_test_proba)
+acc_test = metrics.accuracy_score(y_test, y_test_predict)
+auc_test = metrics.roc_auc_score(y_test, y_test_proba)
+
+roc = metrics.roc_curve(y_test_predict, y_test_proba)
+cm = confusion_matrix(y_test, y_test_predict)
+
+fig, ax = plt.subplots(1, 2, figsize=(12, 5))
+
+# Curva ROC
+ax[0].plot(roc_test[0], roc_test[1], label=f"Teste AUC = {auc_test:.3f}")
+ax[0].plot([0, 1], [0, 1], 'k--')
+ax[0].set_title("Curva ROC")
+ax[0].set_xlabel("Falso Positivo (1 - Especificidade)")
+ax[0].set_ylabel("Verdadeiro Positivo (Sensibilidade)")
+ax[0].legend()
+ax[0].grid(True)
