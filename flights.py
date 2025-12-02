@@ -166,10 +166,27 @@ dia_atraso_percurso = dia_atraso.groupby(['PERCURSO','DAY_OF_MONTH']).agg({'TOTA
 dia_atraso_percurso
 
 #%%
+origin_delay_rate = df.groupby("ORIGIN")["TOTAL_ATRASOS"].mean()
+df["ORIGIN_DELAY_RATE"] = df["ORIGIN"].map(origin_delay_rate)
 
 
-X = df[['DAY_OF_MONTH', 'DAY_OF_WEEK', 'ORIGIN', 'DEST', 'CANCELLED', 'DIVERTED', 'DISTANCE',  'HORA_PARTIDA']].copy()
+dest_delay_rate = df.groupby("DEST")["TOTAL_ATRASOS"].mean()
+df["DEST_DELAY_RATE"] = df["DEST"].map(dest_delay_rate)
+
+hour_delay_rate = df.groupby("HORA_PARTIDA")["TOTAL_ATRASOS"].mean()
+df["HOUR_DELAY_RATE"] = df["HORA_PARTIDA"].map(hour_delay_rate)
+
+route_delay_rate = df.groupby("PERCURSO")["TOTAL_ATRASOS"].mean()
+df["ROUTE_DELAY_RATE"] = df["PERCURSO"].map(route_delay_rate)
+#%%
+
+
+X = df[['DAY_OF_MONTH', 'DAY_OF_WEEK', 'ORIGIN', 'DEST', 'CANCELLED', 'DIVERTED', 'DISTANCE',  'HORA_PARTIDA',
+        'ORIGIN_DELAY_RATE','DEST_DELAY_RATE', 'HOUR_DELAY_RATE','ROUTE_DELAY_RATE' ]].copy()
 y = df[['TOTAL_ATRASOS']].copy()
+
+
+X.info()
 #%%
 X[['CANCELLED', 'DIVERTED', 'DISTANCE', 'HORA_PARTIDA']] = X[['CANCELLED', 'DIVERTED', 'DISTANCE' ,'HORA_PARTIDA']].astype(int)
 #%%
@@ -197,9 +214,10 @@ pipe = Pipeline(steps=[
                 ])
 
 params = {
-    "model__C": [ 0.01, 0.1, 1.0, 10.0],
-    "model__max_iter": [500, 700],
-    "model__class_weight": [None, 'balanced']
+    "model__C": [0.001, 0.01, 0.1, 1.0, 10.0],
+    "model__max_iter": [100, 200, 300],
+    'model__class_weight': ['balanced'],
+    'model__solver': ['lbfgs']
 }
 
 grid = GridSearchCV(pipe, param_grid=params, cv=3, scoring="roc_auc", verbose=2)
@@ -265,29 +283,66 @@ print("\nMelhores parâmetros encontrados:")
 print(grid.best_params_)
 
 #%%
-from sklearn.svm import SVC
+from xgboost import XGBClassifier
 
-model = SVC(random_state=42, probability=True)
+model = XGBClassifier(
+    objective='binary:logistic',
+    eval_metric='logloss',
+    tree_method='hist',      # mais rápido
+    random_state=42
+)
 
 pipe_model = Pipeline(steps=[
     ("preprocesso", X_transformer),
     ("model", model)
 ])
 
-params = {
-    'model__C': [0.1, 1, 10, 100],
-    'model__kernel': ['linear', 'rbf'],
-    'model__class_weight': [None, 'balanced']
+params_xgb = {
+    'model__n_estimators': [300, 600],
+    'model__learning_rate': [0.05, 0.1],
+    'model__max_depth': [3, 5, 7],
+    'model__subsample': [0.8, 1],
+    'model__colsample_bytree': [0.8],
+    'model__gamma': [0, 1]
 }
 
 pipe_model.fit(X_train, y_train)
 
-grid = GridSearchCV(pipe_model, param_grid=params, cv=3, scoring="roc_auc", verbose=2)
+grid = GridSearchCV(pipe_model, param_grid=params_xgb, cv=3, scoring="roc_auc", verbose=2)
 grid.fit(X_train, y_train)
 
 print("\nMelhores parâmetros encontrados:")
 print(grid.best_params_)
 
+#{'model__colsample_bytree': 0.8, 'model__gamma': 0, 'model__learning_rate': 0.1, 'model__max_depth': 7, 'model__n_estimators': 600, 'model__subsample': 0.8}
+#%%
+
+y_test_predict = grid.predict(X_test) #tESTANDO A ACURACIA
+y_test_proba = grid.predict_proba(X_test)[:,1] #TESTANDO A CURVA ROC
+
+roc_test = metrics.roc_curve(y_test, y_test_proba)
+acc_test = metrics.accuracy_score(y_test, y_test_predict)
+auc_test = metrics.roc_auc_score(y_test, y_test_proba)
+
+roc = metrics.roc_curve(y_test_predict, y_test_proba)
+cm = confusion_matrix(y_test, y_test_predict)
+
+fig, ax = plt.subplots(1, 2, figsize=(12, 5))
+
+# Curva ROC
+ax[0].plot(roc_test[0], roc_test[1], label=f"Teste AUC = {auc_test:.3f}")
+ax[0].plot([0, 1], [0, 1], 'k--')
+ax[0].set_title("Curva ROC")
+ax[0].set_xlabel("Falso Positivo (1 - Especificidade)")
+ax[0].set_ylabel("Verdadeiro Positivo (Sensibilidade)")
+ax[0].legend()
+ax[0].grid(True)
+
+#%%
+
+print(acc_test)
+print(roc_test)
+print(auc_test)
 #%%
 from sklearn.model_selection import StratifiedKFold, cross_val_score,cross_val_predict
 import numpy as np
@@ -323,3 +378,60 @@ ax[0].set_xlabel("Falso Positivo (1 - Especificidade)")
 ax[0].set_ylabel("Verdadeiro Positivo (Sensibilidade)")
 ax[0].legend()
 ax[0].grid(True)
+
+#%%
+from sklearn.metrics import accuracy_score, f1_score, confusion_matrix, classification_report
+
+from sklearn.model_selection import RandomizedSearchCV
+model = XGBClassifier(
+    objective='binary:logistic',
+    eval_metric='logloss',
+    tree_method='hist',      # mais rápido
+    random_state=42
+)
+
+pipe_model = Pipeline(steps=[
+    ("preprocesso", X_transformer),
+    ("model", model)
+])
+
+param_dist = {
+
+    'model__max_depth': [3, 5, 7, 9],
+    'model__learning_rate': [0.01, 0.05, 0.1, 0.2],
+    'model__colsample_bytree': [0.6, 0.8, 1.0],
+    'model__gamma': [0, 1, 5],
+    'model__min_child_weight': [1, 3, 5]
+}
+
+
+
+
+random_search = RandomizedSearchCV(
+    pipe,
+    param_distributions=param_dist,
+    n_iter=30,                 # tenta 30 combinações – leve e eficiente
+    scoring='f1',
+    cv=3,
+    verbose=2,
+    n_jobs=-1
+)
+
+print("\nMelhores parâmetros encontrados:")
+random_search.fit(X_train, y_train)
+
+
+#%% MELHOR MODELO
+best_model = random_search.best_estimator_
+print("Melhores parâmetros:", random_search.best_params_)
+
+
+#%% AVALIAÇÃO
+y_pred = best_model.predict(X_test)
+
+print("\nAccuracy:", accuracy_score(y_test, y_pred))
+print("F1 Score:", f1_score(y_test, y_pred))
+print("\nClassification Report:\n", classification_report(y_test, y_pred))
+
+print("\nMatriz de Confusão:")
+print(confusion_matrix(y_test, y_pred))
