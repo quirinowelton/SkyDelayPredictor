@@ -408,7 +408,7 @@ param_dist = {
 
 
 random_search = RandomizedSearchCV(
-    pipe,
+    pipe_model,
     param_distributions=param_dist,
     n_iter=30,                 # tenta 30 combinações – leve e eficiente
     scoring='f1',
@@ -435,3 +435,4 @@ print("\nClassification Report:\n", classification_report(y_test, y_pred))
 
 print("\nMatriz de Confusão:")
 print(confusion_matrix(y_test, y_pred))
+
