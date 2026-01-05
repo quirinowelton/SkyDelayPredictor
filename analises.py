@@ -36,7 +36,20 @@ from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.model_selection import GridSearchCV
 from sklearn import metrics
+pd.set_option('display.max_columns', None)
 #%%
+'''
+#Dataframe summary
+pd.DataFrame({'unicos':data.nunique(),
+              'missing': data.isna().sum()/data.count(),
+              'tipo':data.dtypes})
+              
+              
+              
+              DEPOIS TRANSFORMAR ESSAS COLUNAS EM CATEGORICAS 
+              ['DAY_OF_WEEK','DAY_OF_MONTH','DEP_DEL15','ARR_DEL15','CANCELLED','DIVERTED']
+              '''
+
 pd.set_option('display.max_columns', None)
 
 df_jan = pd.read_csv('Jan_2019_ontime.csv')
@@ -50,132 +63,30 @@ print(df_jan.columns.tolist())
 
 df = pd.concat([df_jan,df_jan], axis=0).reset_index(drop=True)
 #%%
+pd.DataFrame({'unicos':df.nunique(),
+              'missing': df.isna().sum(),
+              'tipo':df.dtypes})
+#%%
+#Separando parte dos dados que estão com valores nulos na coluna de atraso na chegada
+#Para posteiormente podermos prever seus resutados como mais um teste do modelo
+separado_para_previsao = df[df['ARR_DEL15'].isnull()].reset_index(drop=True) 
+#%%
+#Apagando valores nulos de 'ARR_DEL15' que ja separamos e coincidentemente ja retira todos os nulos da base
+df = df.dropna(subset='ARR_DEL15')
 
-'''Arrumar os nulos nas colunas TAIL_NUM , DEP_TIME, DEP_DEL15, ARR_TIME, ARR_DEL15, Unnamed'''
-df.isnull().sum()
-
-#%% Matrícula da aeronave (ex: N123AA)
-df['TAIL_NUM'].value_counts()
-df['TAIL_NUM'] = df['TAIL_NUM'].fillna('SEM_NUM')
-df[df['TAIL_NUM'] == 'SEM_NUM']
-
-#%% Hora real da decolagem (formato HHMM)
-df['DEP_TIME'].value_counts()
-
-
-#%% Indicador de atraso na partida:
-# 1 = atraso > 15 minutos
-# 0 = sem atraso significativo
-df['DEP_DEL15'].value_counts()
-
-
-
-#%% Hora real da chegada (formato HHMM).
-df['ARR_TIME'].value_counts()
-
-#%% Indicador de atraso na chegada (> 15 minutos):
-# 1 = atrasado
-# 0 = não atrasado
-df['ARR_DEL15'].value_counts()
+df[['DAY_OF_WEEK','DAY_OF_MONTH','DEP_DEL15','ARR_DEL15','CANCELLED','DIVERTED']] = df[['DAY_OF_WEEK','DAY_OF_MONTH','DEP_DEL15','ARR_DEL15','CANCELLED','DIVERTED']].astype('category')
+#%%
+df['ARR_TIME'] = df['ARR_TIME'].astype(str).str.zfill(4)
+df['DEP_TIME'] = df['DEP_TIME'].astype(str).str.zfill(4)
 
 #%%
-#%%
-df.info()
-
-#%%
-df.drop(columns=['Unnamed: 21'], axis=1, inplace= True)
-#%%
-df.isnull().sum()
-
-#%% 
-#criar gafico da porcentagem de atrasos
-total_atrasos = df[['ARR_DEL15','DEP_DEL15']].copy()
-#%%
-total_atrasos['TOTAL_ATRASOS'] = total_atrasos['ARR_DEL15'] + df['DEP_DEL15']
-total_atrasos['TOTAL_ATRASOS'] = total_atrasos['TOTAL_ATRASOS'].replace(2,1)
-total_atrasos = total_atrasos['TOTAL_ATRASOS'].value_counts(normalize=True) * 100
-total_atrasos = pd.DataFrame(total_atrasos)
-total_atrasos
-#22,12% teve algum tipo de atrado, seja na chegada ou na partida
-#%%
-plt.figure(figsize=[14,10])
-sns.barplot(data=total_atrasos, x=total_atrasos.index, y=total_atrasos['proportion'])
-plt.show()
-
-#%%
-#PERCURSO DE DESTINOS COM MAIS ATRASOS
-df['PERCURSO'] = df['ORIGIN'] + " - " + df['DEST'] 
-
-rotas_atraso = pd.crosstab(df['PERCURSO'], df['ARR_DEL15']).sort_values(by=[1], ascending=False).head(10)
-#AS 10 ROTAS COM MAIOR ATRASADO SENDO NA CHEGADA
+#Analizando a distribuição dos valores de chegadas atrasadas normalizados e não normalizados
+atrasos_proporcao = pd.DataFrame(round(df['ARR_DEL15'].value_counts(normalize=True)*100, 2))
+atrasos_count= pd.DataFrame(df['ARR_DEL15'].value_counts())
+atrasos = pd.merge(atrasos_count, atrasos_proporcao, left_index=True, right_index=True).reset_index()
+atrasos
 
 plt.figure(figsize=[14,10])
-sns.barplot(data=rotas_atraso, x=rotas_atraso.index, y=1.0)
+sns.barplot(data=atrasos, x=atrasos.index, y=atrasos['count'])
 plt.show()
-
 #%%
-#ATRASO DAS PARTIDAS ATRAVES DAS ORIGENS NA PARTIDA
-atraso_partida = df[df['DEP_DEL15'] == 1.0]
-atraso_partida = atraso_partida.groupby('ORIGIN').agg({'DEP_DEL15': 'sum'}).sort_values(by='DEP_DEL15', ascending=False).head(10)
-atraso_partida
-#%%
-plt.figure(figsize=[14,10])
-sns.barplot(data=atraso_partida, x=atraso_partida.index, y='DEP_DEL15')
-plt.show()
-
-#%%
-'''REVER ISSO AQUI, EXISTE A FAIXA DE HORARIO DE SAIDA SEM OS MINUTOS FUNCIONA COMO FAIZA DE HORARIO'''
-'''-----------------------------------------PAREI AQUI------------------------------------------------------------------'''
-#COLUNA COM APENAS HORA DE PARTIDA, PARA VER QUAL HORARIO TEM MAIS ATRASOS
-
-df['HORA_PARTIDA'] = df['DEP_TIME'].astype(str).str.zfill(4).str[:2]
-#ATRASO DE ACORDO COM AS HORAS
-
-#%%
-df['DEP_TIME'].isnull().sum()
-#%%
-hora_partida_atrasos = df[df['ARR_DEL15'] == 1.0]
-hora_partida_atrasos = pd.crosstab(df['HORA_PARTIDA'], df['ARR_DEL15']).sort_values(by=1, ascending=False).head(10)
-hora_partida_atrasos
-
-#%%
-#COLUNA COM APENAS HORA DE CHEGADA, SEM CONTAR AS PARTIDAS ATRASADAS
-
-
-df['HORA_CHEGADA'] = df['ARR_TIME'].astype(str).str.zfill(4).str[:2]
-#%%
-#ATRASO DE ACORDO COM AS HORAS
-df_chegada_atrasada = df[df['DEP_DEL15']==0.0]
-hora_chegada_atrasos = pd.crosstab(df_chegada_atrasada['HORA_CHEGADA'], df_chegada_atrasada['ARR_DEL15']).sort_values(by=[1], ascending=False)  
-hora_chegada_atrasos
-#%% dia da semana e dia do mes com mais voos atrasados
-dia_atraso = df[['DAY_OF_WEEK', 'PERCURSO', 'ARR_DEL15']]
-dia_atraso_count = dia_atraso.groupby('DAY_OF_WEEK').agg({'ARR_DEL15':'count'}).sort_values(by='ARR_DEL15', ascending=False).head(10)
-dia_atraso_count
-#%%dia do mes por percurso com mais voos atrasados
-dia_atraso_percurso = dia_atraso.groupby(['PERCURSO','DAY_OF_WEEK']).agg({'ARR_DEL15':'count'}).sort_values(by='ARR_DEL15', ascending=False).head(10)
-dia_atraso_percurso
-
-#%% analise de dia por numero de atrasos
-dia_atraso = df[['DAY_OF_MONTH', 'PERCURSO', 'ARR_DEL15']]
-dia_atraso_count = dia_atraso.groupby('DAY_OF_MONTH').agg({'ARR_DEL15':'count'}).sort_values(by='ARR_DEL15', ascending=False).head(10)
-dia_atraso_count
-#%% analise de dia e percurso por numero de atrasos
-dia_atraso_percurso = dia_atraso.groupby(['PERCURSO','DAY_OF_MONTH']).agg({'ARR_DEL15':'count'}).sort_values(by='ARR_DEL15', ascending=False).head(10)
-dia_atraso_percurso
-
-#%%
-'''
-origin_delay_rate = df.groupby("ORIGIN")["TOTAL_ATRASOS"].mean()
-df["ORIGIN_DELAY_RATE"] = df["ORIGIN"].map(origin_delay_rate)
-
-
-dest_delay_rate = df.groupby("DEST")["TOTAL_ATRASOS"].mean()
-df["DEST_DELAY_RATE"] = df["DEST"].map(dest_delay_rate)
-
-hour_delay_rate = df.groupby("HORA_PARTIDA")["TOTAL_ATRASOS"].mean()
-df["HOUR_DELAY_RATE"] = df["HORA_PARTIDA"].map(hour_delay_rate)
-
-route_delay_rate = df.groupby("PERCURSO")["TOTAL_ATRASOS"].mean()
-df["ROUTE_DELAY_RATE"] = df["PERCURSO"].map(route_delay_rate)
-#%%'''
